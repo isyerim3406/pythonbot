@@ -5,7 +5,6 @@ from binance import AsyncClient, BinanceSocketManager
 from dotenv import load_dotenv
 import telegram
 from telegram import constants
-from threading import Thread
 import time
 
 # .env dosyasını yükle
@@ -208,9 +207,8 @@ class MockBinanceSocketManager:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
-    # Bu metod futures_kline_socket olarak yeniden adlandırıldı
-    def futures_kline_socket(self, **kwargs):
-        print(f"SİMÜLASYON: {kwargs['symbol']} sembolü için WebSocket bağlantısı kuruluyor.")
+    def futures_socket(self, stream_name):
+        print(f"SİMÜLASYON: {stream_name} için WebSocket bağlantısı kuruluyor.")
         return self
 
     async def recv(self):
@@ -308,7 +306,7 @@ async def place_order(client, side, signal_message):
 async def process_message(msg, client):
     global bot_current_position
     
-    if msg['e'] == 'kline' and msg['k']['x']:
+    if 'k' in msg and 'x' in msg['k'] and msg['k']['x']:
         kline = msg['k']
         new_bar = {
             'open': float(kline['o']),
@@ -333,13 +331,13 @@ async def main():
     if not is_simulation_mode:
         client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
         bm = BinanceSocketManager(client)
-        # Hata burada oluşuyordu, futures_kline_socket olarak düzeltildi
-        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+        # futures_kline_socket yerine futures_socket kullanılıyor
+        ts = bm.futures_socket(f'{CFG["SYMBOL"].lower()}@kline_{CFG["INTERVAL"]}')
     else:
         client = MockAsyncClient()
         bm = MockBinanceSocketManager(client)
-        # Simülasyon modunda da tutarlılık için düzeltildi
-        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+        # Simülasyon modunda da tutarlılık için futures_socket kullanılıyor
+        ts = bm.futures_socket(f'{CFG["SYMBOL"].lower()}@kline_{CFG["INTERVAL"]}')
 
     await fetch_initial_data(client, CFG['SYMBOL'], CFG['INTERVAL'])
     
