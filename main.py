@@ -208,17 +208,17 @@ class MockBinanceSocketManager:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    # Bu metod futures_kline_socket olarak yeniden adlandırıldı
+    def futures_kline_socket(self, **kwargs):
+        print(f"SİMÜLASYON: {kwargs['symbol']} sembolü için WebSocket bağlantısı kuruluyor.")
+        return self
+
     async def recv(self):
         if self.current_index >= len(self.mock_data):
             self.current_index = 0  # Döngüsel olarak veri sağlar
         data = self.mock_data[self.current_index]
         self.current_index += 1
         return data
-
-    def futures_socket(self, stream_path):
-        # Bu metod futures_kline_socket yerine kullanılacak
-        print(f"SİMÜLASYON: {stream_path} adresine WebSocket bağlantısı kuruluyor.")
-        return self
 
 # =========================================================================================
 # TELEGRAM BOT VE DİĞER YARDIMCI FONKSİYONLAR
@@ -333,13 +333,13 @@ async def main():
     if not is_simulation_mode:
         client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
         bm = BinanceSocketManager(client)
-        stream_path = f'ws/!kline_{CFG["SYMBOL"].lower()}@{CFG["INTERVAL"]}'
-        ts = bm.futures_socket(stream_path)
+        # Hata burada oluşuyordu, futures_kline_socket olarak düzeltildi
+        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
     else:
         client = MockAsyncClient()
         bm = MockBinanceSocketManager(client)
-        stream_path = f'ws/!kline_{CFG["SYMBOL"].lower()}@{CFG["INTERVAL"]}'
-        ts = bm.futures_socket(stream_path)
+        # Simülasyon modunda da tutarlılık için düzeltildi
+        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
 
     await fetch_initial_data(client, CFG['SYMBOL'], CFG['INTERVAL'])
     
