@@ -1,7 +1,7 @@
 import asyncio
 import os
 import json
-from binance import AsyncClient, BinanceSocketManager
+from binance import AsyncClient, FuturesSocketManager
 from dotenv import load_dotenv
 import telegram
 from telegram import constants
@@ -193,7 +193,7 @@ class MockAsyncClient:
         print(f"✅ SİMÜLASYON: {kwargs['side']} emri verildi. Miktar: {kwargs['quantity']}")
         return {'status': 'FILLED'}
 
-class MockBinanceSocketManager:
+class MockFuturesSocketManager:
     def __init__(self, client):
         self.client = client
         self.mock_data = []
@@ -330,13 +330,11 @@ async def process_message(msg, client):
 async def main():
     if not is_simulation_mode:
         client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
-        bm = BinanceSocketManager(client)
-        # futures_kline_socket yerine futures_socket kullanılıyor
+        bm = FuturesSocketManager(client)
         ts = bm.futures_socket(f'{CFG["SYMBOL"].lower()}@kline_{CFG["INTERVAL"]}')
     else:
         client = MockAsyncClient()
-        bm = MockBinanceSocketManager(client)
-        # Simülasyon modunda da tutarlılık için futures_socket kullanılıyor
+        bm = MockFuturesSocketManager(client)
         ts = bm.futures_socket(f'{CFG["SYMBOL"].lower()}@kline_{CFG["INTERVAL"]}')
 
     await fetch_initial_data(client, CFG['SYMBOL'], CFG['INTERVAL'])
