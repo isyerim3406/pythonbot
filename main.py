@@ -4,6 +4,7 @@ import json
 from binance import AsyncClient, BinanceSocketManager
 from dotenv import load_dotenv
 import telegram
+from telegram import constants
 from threading import Thread
 import time
 
@@ -214,7 +215,9 @@ class MockBinanceSocketManager:
         self.current_index += 1
         return data
 
-    def futures_kline_socket(self, **kwargs):
+    def futures_socket(self, stream_path):
+        # Bu metod futures_kline_socket yerine kullanılacak
+        print(f"SİMÜLASYON: {stream_path} adresine WebSocket bağlantısı kuruluyor.")
         return self
 
 # =========================================================================================
@@ -231,7 +234,7 @@ async def send_telegram_message(text):
         print("Telegram API token veya chat ID ayarlanmadı. Mesaj atlanıyor.")
         return
     try:
-        await telegram_bot.send_message(chat_id=os.getenv('TG_CHAT_ID'), text=text, parse_mode=telegram.ParseMode.MARKDOWN)
+        await telegram_bot.send_message(chat_id=os.getenv('TG_CHAT_ID'), text=text, parse_mode=constants.ParseMode.MARKDOWN)
     except Exception as e:
         print(f"Telegram mesajı gönderilirken hata oluştu: {e}")
 
@@ -330,11 +333,13 @@ async def main():
     if not is_simulation_mode:
         client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
         bm = BinanceSocketManager(client)
-        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+        stream_path = f'ws/!kline_{CFG["SYMBOL"].lower()}@{CFG["INTERVAL"]}'
+        ts = bm.futures_socket(stream_path)
     else:
         client = MockAsyncClient()
         bm = MockBinanceSocketManager(client)
-        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+        stream_path = f'ws/!kline_{CFG["SYMBOL"].lower()}@{CFG["INTERVAL"]}'
+        ts = bm.futures_socket(stream_path)
 
     await fetch_initial_data(client, CFG['SYMBOL'], CFG['INTERVAL'])
     
