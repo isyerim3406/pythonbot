@@ -172,20 +172,60 @@ total_net_profit = 0
 is_bot_initialized = False
 last_signal_time = 0
 
-# Simülasyon modu kontrolü
 is_simulation_mode = not os.getenv('BINANCE_API_KEY') or not os.getenv('BINANCE_SECRET_KEY')
 
-# Telegram Bot
+# =========================================================================================
+# SİMÜLASYON İÇİN SANAL BİNANCE İstemcisi
+# =========================================================================================
+class MockAsyncClient:
+    async def futures_klines(self, **kwargs):
+        # Statik veri döndürür
+        with open('mock_klines.json', 'r') as f:
+            return json.load(f)
+
+    async def futures_account_balance(self, **kwargs):
+        return [{'asset': 'USDT', 'availableBalance': '1000'}]
+    
+    async def futures_position_information(self, **kwargs):
+        return [{'symbol': CFG['SYMBOL'], 'positionAmt': '0'}]
+
+    async def futures_create_order(self, **kwargs):
+        print(f"✅ SİMÜLASYON: {kwargs['side']} emri verildi. Miktar: {kwargs['quantity']}")
+        return {'status': 'FILLED'}
+
+class MockBinanceSocketManager:
+    def __init__(self, client):
+        self.client = client
+        self.mock_data = []
+        with open('mock_kline_stream.json', 'r') as f:
+            self.mock_data = json.load(f)
+        self.current_index = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    async def recv(self):
+        if self.current_index >= len(self.mock_data):
+            self.current_index = 0  # Döngüsel olarak veri sağlar
+        data = self.mock_data[self.current_index]
+        self.current_index += 1
+        return data
+
+    def futures_kline_socket(self, **kwargs):
+        return self
+
+# =========================================================================================
+# TELEGRAM BOT VE DİĞER YARDIMCI FONKSİYONLAR
+# =========================================================================================
 telegram_bot = None
 if os.getenv('TG_TOKEN') and os.getenv('TG_CHAT_ID'):
     telegram_bot = telegram.Bot(token=os.getenv('TG_TOKEN'))
 
-# Strateji nesnesi
 ut_bot_strategy = UTBotStrategy(options=CFG)
 
-# =========================================================================================
-# YARDIMCI FONKSİYONLAR
-# =========================================================================================
 async def send_telegram_message(text):
     if not telegram_bot or not os.getenv('TG_CHAT_ID'):
         print("Telegram API token veya chat ID ayarlanmadı. Mesaj atlanıyor.")
@@ -217,14 +257,12 @@ async def place_order(client, side, signal_message):
 
     last_close_price = ut_bot_strategy.klines[-1]['close'] if ut_bot_strategy.klines else 0
     
-    # Mevcut pozisyonu kapatma
     if bot_current_position != 'none':
         try:
             ut_bot_strategy.close_position(last_close_price)
             total_net_profit = sum(t['pnl'] for t in ut_bot_strategy.trades if t['action'] == 'exit')
             
             if not is_simulation_mode:
-                # Gerçek hesapta pozisyon kapatma
                 account_info = await client.futures_account_balance()
                 position_info = await client.futures_position_information()
                 symbol_pos = next((p for p in position_info if p['symbol'] == CFG['SYMBOL']), None)
@@ -233,6 +271,8 @@ async def place_order(client, side, signal_message):
                     closing_side = 'SELL' if float(symbol_pos['positionAmt']) > 0 else 'BUY'
                     await client.futures_create_order(symbol=CFG['SYMBOL'], side=closing_side, type='MARKET', quantity=quantity)
                     print(f"✅ Gerçek pozisyon ({bot_current_position}) kapatıldı.")
+            else:
+                print(f"✅ SİMÜLASYON: Mevcut pozisyon ({bot_current_position}) kapatıldı.")
 
             profit = ut_bot_strategy.trades[-1]['pnl']
             profit_message = f"+{profit:.2f} USDT" if profit >= 0 else f"{profit:.2f} USDT"
@@ -243,7 +283,6 @@ async def place_order(client, side, signal_message):
             print(f"Mevcut pozisyonu kapatırken hata oluştu: {e}")
             return
     
-    # Yeni pozisyon açma
     if bot_current_position == 'none':
         try:
             current_price = last_close_price
@@ -263,7 +302,7 @@ async def place_order(client, side, signal_message):
         except Exception as e:
             print(f"Emir verirken hata oluştu: {e}")
 
-async def process_message(msg):
+async def process_message(msg, client):
     global bot_current_position
     
     if msg['e'] == 'kline' and msg['k']['x']:
@@ -282,25 +321,42 @@ async def process_message(msg):
         print(f"Yeni mum verisi geldi. Fiyat: {new_bar['close']}. Sinyal: {signal['type'] if signal else 'none'}.")
 
         if signal:
-            client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
             if signal['type'] == 'BUY' and bot_current_position != 'long':
                 await place_order(client, 'BUY', signal['message'])
             elif signal['type'] == 'SELL' and bot_current_position != 'short':
                 await place_order(client, 'SELL', signal['message'])
 
 async def main():
-    client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
+    if not is_simulation_mode:
+        client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
+        bm = BinanceSocketManager(client)
+        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+    else:
+        client = MockAsyncClient()
+        bm = MockBinanceSocketManager(client)
+        ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+
     await fetch_initial_data(client, CFG['SYMBOL'], CFG['INTERVAL'])
     
-    bm = BinanceSocketManager(client)
-    ts = bm.futures_kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
-
     async with ts as kline_socket:
         while True:
             res = await kline_socket.recv()
             if isinstance(res, dict):
-                await process_message(res)
+                await process_message(res, client)
 
 if __name__ == "__main__":
+    # Test verisi dosyalarını oluştur
+    with open('mock_klines.json', 'w') as f:
+        json.dump([
+            [1678886400000, "42000", "42500", "41500", "42300"],
+            [1678886460000, "42300", "42800", "42200", "42700"],
+            [1678886520000, "42700", "42900", "42600", "42850"]
+        ], f)
+    with open('mock_kline_stream.json', 'w') as f:
+        json.dump([
+            {"e":"kline","k":{"t":1678886580000,"T":1678886639999,"s":"ETHUSDT","i":"1m","f":100,"L":200,"o":"42850","c":"43000","h":"43050","l":"42800","v":"1000","n":100,"x":True,"q":"100000","V":"500","Q":"50000","B":"0"}},
+            {"e":"kline","k":{"t":1678886640000,"T":1678886699999,"s":"ETHUSDT","i":"1m","f":201,"L":301,"o":"43000","c":"42950","h":"43020","l":"42900","v":"1200","n":150,"x":True,"q":"120000","V":"600","Q":"60000","B":"0"}}
+        ], f)
+
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
