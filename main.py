@@ -34,7 +34,6 @@ class UTBotStrategy:
         self.capital = self.initial_capital
         self.trades = []
         self.position_size = 0
-        self.total_pnl = 0
 
     def calculate_atr(self, period):
         if len(self.true_ranges) < period:
@@ -105,10 +104,9 @@ class UTBotStrategy:
 
     def close_position(self, price):
         if self.position_size == 0:
-            return
+            return 0
         pnl = self.position_size * (price - self.get_avg_entry_price())
         self.capital += pnl
-        self.total_pnl += pnl
         self.trades.append({
             'type': 'SELL' if self.position_size > 0 else 'BUY',
             'price': price,
@@ -117,6 +115,7 @@ class UTBotStrategy:
             'pnl': pnl
         })
         self.position_size = 0
+        return pnl
 
     def open_position(self, side, price):
         qty = (self.capital * (self.qty_percent / 100)) / price
@@ -173,6 +172,7 @@ async def send_telegram_message(text):
 # BOT ANA DÖNGÜSÜ (Önce 500 mum geçmişi, sonra WebSocket)
 # =========================================================================================
 async def run_bot():
+    global total_net_profit
     print("🤖 Bot başlatılıyor...")
     await send_telegram_message("🤖 Bot Render üzerinde başlatıldı!")
 
@@ -195,7 +195,7 @@ async def run_bot():
     else:
         print("ℹ️ Son 500 mumda sinyal bulunamadı.")
 
-    # WebSocket ile yeni mumları dinle (ReconnectingWebsocket ile)
+    # WebSocket ile yeni mumları dinle
     ts = bm.kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
     async with ts as stream:
         while True:
@@ -217,19 +217,18 @@ async def run_bot():
 
                     if result['signal']:
                         signal = result['signal']
+                        # Pozisyonu kapat/aç
+                        pnl = 0
+                        if ut_bot_strategy.position_size != 0:
+                            pnl = ut_bot_strategy.close_position(close_price)
+                            total_net_profit += pnl
+                        ut_bot_strategy.open_position(signal['type'], close_price)
 
-                        if signal['type'] == 'BUY':
-                            if ut_bot_strategy.position_size < 0:
-                                ut_bot_strategy.close_position(close_price)
-                            ut_bot_strategy.open_position('BUY', close_price)
-                        elif signal['type'] == 'SELL':
-                            if ut_bot_strategy.position_size > 0:
-                                ut_bot_strategy.close_position(close_price)
-                            ut_bot_strategy.open_position('SELL', close_price)
-
-                        log_msg = f"{signal['message']} | Fiyat: {close_price} | Toplam PnL: {ut_bot_strategy.total_pnl:.2f} | Bakiye: {ut_bot_strategy.capital:.2f}"
-                        print(f"📢 {log_msg}")
-                        await send_telegram_message(log_msg)
+                        log_msg = f"{signal['message']} | Fiyat: {close_price} | PnL: {pnl:.2f} | Toplam: {total_net_profit:.2f} | Bakiye: {ut_bot_strategy.capital:.2f}"
+                    else:
+                        log_msg = f"ℹ️ No signal | close={close_price} | Bakiye: {ut_bot_strategy.capital:.2f}"
+                    print(f"📢 {log_msg}")
+                    await send_telegram_message(log_msg)
             except Exception as e:
                 print(f"⚠️ WebSocket hata: {e}, tekrar bağlanılıyor...")
                 await asyncio.sleep(5)
