@@ -345,26 +345,6 @@ async def process_message(msg, client):
             elif signal['type'] == 'SELL' and bot_current_position != 'short':
                 await place_order(client, 'SELL', signal['message'])
 
-def create_mock_files():
-    """Mock dosyalarını oluştur"""
-    try:
-        if not os.path.exists('mock_klines.json'):
-            with open('mock_klines.json', 'w') as f:
-                json.dump([
-                    [1678886400000, "42000", "42500", "41500", "42300"],
-                    [1678886460000, "42300", "42800", "42200", "42700"],
-                    [1678886520000, "42700", "42900", "42600", "42850"]
-                ], f)
-        
-        if not os.path.exists('mock_kline_stream.json'):
-            with open('mock_kline_stream.json', 'w') as f:
-                json.dump([
-                    {"e":"kline","k":{"t":1678886580000,"T":1678886639999,"s":"ETHUSDT","i":"1m","f":100,"L":200,"o":"42850","c":"43000","h":"43050","l":"42800","v":"1000","n":100,"x":True,"q":"100000","V":"500","Q":"50000","B":"0"}},
-                    {"e":"kline","k":{"t":1678886640000,"T":1678886699999,"s":"ETHUSDT","i":"1m","f":201,"L":301,"o":"43000","c":"42950","h":"43020","l":"42900","v":"1200","n":150,"x":True,"q":"120000","V":"600","Q":"60000","B":"0"}}
-                ], f)
-    except Exception as e:
-        print(f"Mock dosyalar oluşturulurken hata: {e}")
-
 async def main():
     # Mock dosyalarını oluştur
     create_mock_files()
@@ -400,6 +380,34 @@ async def main():
                     await process_message(res['data'], client)
                 else:
                     await process_message(res, client)
+
+async def main():
+    """Ana fonksiyon - HTTP server ve bot'u paralel çalıştır"""
+    # HTTP server'ı başlat (Render için)
+    await start_http_server()
+    
+    # Bot'u çalıştır
+    await run_bot()
+
+def create_mock_files():
+    """Mock dosyalarını oluştur"""
+    try:
+        if not os.path.exists('mock_klines.json'):
+            with open('mock_klines.json', 'w') as f:
+                json.dump([
+                    [1678886400000, "42000", "42500", "41500", "42300"],
+                    [1678886460000, "42300", "42800", "42200", "42700"],
+                    [1678886520000, "42700", "42900", "42600", "42850"]
+                ], f)
+        
+        if not os.path.exists('mock_kline_stream.json'):
+            with open('mock_kline_stream.json', 'w') as f:
+                json.dump([
+                    {"e":"kline","k":{"t":1678886580000,"T":1678886639999,"s":"ETHUSDT","i":"1m","f":100,"L":200,"o":"42850","c":"43000","h":"43050","l":"42800","v":"1000","n":100,"x":True,"q":"100000","V":"500","Q":"50000","B":"0"}},
+                    {"e":"kline","k":{"t":1678886640000,"T":1678886699999,"s":"ETHUSDT","i":"1m","f":201,"L":301,"o":"43000","c":"42950","h":"43020","l":"42900","v":"1200","n":150,"x":True,"q":"120000","V":"600","Q":"60000","B":"0"}}
+                ], f)
+    except Exception as e:
+        print(f"Mock dosyalar oluşturulurken hata: {e}")
 
 if __name__ == "__main__":
     # Yeni asyncio kullanımı
