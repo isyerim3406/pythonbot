@@ -168,7 +168,7 @@ async def send_telegram_message(text):
         print(f"Telegram mesajı gönderilirken hata oluştu: {e}")
 
 # =========================================================================================
-# BOT ANA DÖNGÜSÜ (WebSocket ile Binance'ten veri)
+# BOT ANA DÖNGÜSÜ (Önce 500 mum geçmişi, sonra WebSocket)
 # =========================================================================================
 async def run_bot():
     print("🤖 Bot başlatılıyor...")
@@ -177,31 +177,51 @@ async def run_bot():
     client = await AsyncClient.create()
     bm = BinanceSocketManager(client)
 
-    # Kline stream (mum verisi)
+    # Başlangıçta geçmiş 500 mum al
+    print("📥 Geçmiş 500 mum çekiliyor...")
+    candles = await client.get_klines(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'], limit=500)
+    last_signal = None
+    for c in candles:
+        ts, o, h, l, cl = c[0], float(c[1]), float(c[2]), float(c[3]), float(c[4])
+        result = ut_bot_strategy.process_candle(ts, o, h, l, cl)
+        if result['signal']:
+            last_signal = result['signal']
+    if last_signal:
+        msg = f"📊 Son oluşan sinyal: {last_signal['message']}"
+        print(msg)
+        await send_telegram_message(msg)
+    else:
+        print("ℹ️ Son 500 mumda sinyal bulunamadı.")
+
+    # WebSocket ile yeni mumları dinle (ReconnectingWebsocket ile)
     ts = bm.kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+    async with ts as stream:
+        while True:
+            try:
+                msg = await stream.recv()
+                if msg.get('e') != 'kline':
+                    continue
 
-    async with ts as tscm:
-        async for msg in tscm:
-            if msg['e'] != 'kline':
-                continue
+                k = msg['k']
+                if k['x']:  # Mum kapanışı
+                    timestamp = k['t']
+                    open_price = float(k['o'])
+                    high = float(k['h'])
+                    low = float(k['l'])
+                    close_price = float(k['c'])
 
-            k = msg['k']
-            is_candle_closed = k['x']
-            if is_candle_closed:
-                timestamp = k['t']
-                open_price = float(k['o'])
-                high = float(k['h'])
-                low = float(k['l'])
-                close_price = float(k['c'])
+                    print(f"🕒 Yeni mum kapandı: {CFG['SYMBOL']} {CFG['INTERVAL']} close={close_price}")
+                    result = ut_bot_strategy.process_candle(timestamp, open_price, high, low, close_price)
 
-                print(f"🕒 Yeni mum kapandı: {CFG['SYMBOL']} {CFG['INTERVAL']} close={close_price}")
-                result = ut_bot_strategy.process_candle(timestamp, open_price, high, low, close_price)
-
-                if result['signal']:
-                    signal = result['signal']
-                    log_msg = f"{signal['message']} | Fiyat: {close_price}"
-                    print(f"📢 {log_msg}")
-                    await send_telegram_message(log_msg)
+                    if result['signal']:
+                        signal = result['signal']
+                        log_msg = f"{signal['message']} | Fiyat: {close_price}"
+                        print(f"📢 {log_msg}")
+                        await send_telegram_message(log_msg)
+            except Exception as e:
+                print(f"⚠️ WebSocket hata: {e}, tekrar bağlanılıyor...")
+                await asyncio.sleep(5)
+                break
 
     await client.close_connection()
 
