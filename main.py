@@ -180,8 +180,16 @@ is_simulation_mode = not os.getenv('BINANCE_API_KEY') or not os.getenv('BINANCE_
 class MockAsyncClient:
     async def futures_klines(self, **kwargs):
         # Statik veri döndürür
-        with open('mock_klines.json', 'r') as f:
-            return json.load(f)
+        try:
+            with open('mock_klines.json', 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            # Varsayılan mock data
+            return [
+                [1678886400000, "42000", "42500", "41500", "42300"],
+                [1678886460000, "42300", "42800", "42200", "42700"],
+                [1678886520000, "42700", "42900", "42600", "42850"]
+            ]
 
     async def futures_account_balance(self, **kwargs):
         return [{'asset': 'USDT', 'availableBalance': '1000'}]
@@ -197,8 +205,15 @@ class MockBinanceSocketManager:
     def __init__(self, client):
         self.client = client
         self.mock_data = []
-        with open('mock_kline_stream.json', 'r') as f:
-            self.mock_data = json.load(f)
+        try:
+            with open('mock_kline_stream.json', 'r') as f:
+                self.mock_data = json.load(f)
+        except FileNotFoundError:
+            # Varsayılan mock stream data
+            self.mock_data = [
+                {"e":"kline","k":{"t":1678886580000,"T":1678886639999,"s":"ETHUSDT","i":"1m","f":100,"L":200,"o":"42850","c":"43000","h":"43050","l":"42800","v":"1000","n":100,"x":True,"q":"100000","V":"500","Q":"50000","B":"0"}},
+                {"e":"kline","k":{"t":1678886640000,"T":1678886699999,"s":"ETHUSDT","i":"1m","f":201,"L":301,"o":"43000","c":"42950","h":"43020","l":"42900","v":"1200","n":150,"x":True,"q":"120000","V":"600","Q":"60000","B":"0"}}
+            ]
         self.current_index = 0
 
     async def __aenter__(self):
@@ -216,6 +231,7 @@ class MockBinanceSocketManager:
             self.current_index = 0  # Döngüsel olarak veri sağlar
         data = self.mock_data[self.current_index]
         self.current_index += 1
+        await asyncio.sleep(1)  # 1 saniye bekle
         return data
 
 # =========================================================================================
@@ -330,10 +346,16 @@ async def process_message(msg, client):
                 await place_order(client, 'SELL', signal['message'])
 
 async def main():
+    # Mock dosyalarını oluştur
+    create_mock_files()
+    
     if not is_simulation_mode:
         client = await AsyncClient.create(os.getenv('BINANCE_API_KEY'), os.getenv('BINANCE_SECRET_KEY'), testnet=CFG['IS_TESTNET'])
         bm = BinanceSocketManager(client)
-        ts = bm.kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+        # Doğru WebSocket kullanımı
+        symbol_lower = CFG['SYMBOL'].lower()
+        stream_name = f'{symbol_lower}@kline_{CFG["INTERVAL"]}'
+        ts = bm.multiplex_socket([stream_name])
     else:
         client = MockAsyncClient()
         bm = MockBinanceSocketManager(client)
@@ -353,21 +375,32 @@ async def main():
         while True:
             res = await kline_socket.recv()
             if isinstance(res, dict):
-                await process_message(res, client)
+                # Multiplex socket için stream data'yı kontrol et
+                if 'stream' in res and 'data' in res:
+                    await process_message(res['data'], client)
+                else:
+                    await process_message(res, client)
+
+def create_mock_files():
+    """Mock dosyalarını oluştur"""
+    try:
+        if not os.path.exists('mock_klines.json'):
+            with open('mock_klines.json', 'w') as f:
+                json.dump([
+                    [1678886400000, "42000", "42500", "41500", "42300"],
+                    [1678886460000, "42300", "42800", "42200", "42700"],
+                    [1678886520000, "42700", "42900", "42600", "42850"]
+                ], f)
+        
+        if not os.path.exists('mock_kline_stream.json'):
+            with open('mock_kline_stream.json', 'w') as f:
+                json.dump([
+                    {"e":"kline","k":{"t":1678886580000,"T":1678886639999,"s":"ETHUSDT","i":"1m","f":100,"L":200,"o":"42850","c":"43000","h":"43050","l":"42800","v":"1000","n":100,"x":True,"q":"100000","V":"500","Q":"50000","B":"0"}},
+                    {"e":"kline","k":{"t":1678886640000,"T":1678886699999,"s":"ETHUSDT","i":"1m","f":201,"L":301,"o":"43000","c":"42950","h":"43020","l":"42900","v":"1200","n":150,"x":True,"q":"120000","V":"600","Q":"60000","B":"0"}}
+                ], f)
+    except Exception as e:
+        print(f"Mock dosyalar oluşturulurken hata: {e}")
 
 if __name__ == "__main__":
-    # Test verisi dosyalarını oluştur
-    with open('mock_klines.json', 'w') as f:
-        json.dump([
-            [1678886400000, "42000", "42500", "41500", "42300"],
-            [1678886460000, "42300", "42800", "42200", "42700"],
-            [1678886520000, "42700", "42900", "42600", "42850"]
-        ], f)
-    with open('mock_kline_stream.json', 'w') as f:
-        json.dump([
-            {"e":"kline","k":{"t":1678886580000,"T":1678886639999,"s":"ETHUSDT","i":"1m","f":100,"L":200,"o":"42850","c":"43000","h":"43050","l":"42800","v":"1000","n":100,"x":True,"q":"100000","V":"500","Q":"50000","B":"0"}},
-            {"e":"kline","k":{"t":1678886640000,"T":1678886699999,"s":"ETHUSDT","i":"1m","f":201,"L":301,"o":"43000","c":"42950","h":"43020","l":"42900","v":"1200","n":150,"x":True,"q":"120000","V":"600","Q":"60000","B":"0"}}
-        ], f)
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    # Yeni asyncio kullanımı
+    asyncio.run(main())
