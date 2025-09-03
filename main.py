@@ -168,15 +168,42 @@ async def send_telegram_message(text):
         print(f"Telegram mesajı gönderilirken hata oluştu: {e}")
 
 # =========================================================================================
-# BOT ANA DÖNGÜSÜ
+# BOT ANA DÖNGÜSÜ (WebSocket ile Binance'ten veri)
 # =========================================================================================
 async def run_bot():
     print("🤖 Bot başlatılıyor...")
     await send_telegram_message("🤖 Bot Render üzerinde başlatıldı!")
-    while True:
-        # Buraya websocket bağlama & sinyal işleme kodu entegre edilebilir
-        print("Bot tick...")
-        await asyncio.sleep(10)
+
+    client = await AsyncClient.create()
+    bm = BinanceSocketManager(client)
+
+    # Kline stream (mum verisi)
+    ts = bm.kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
+
+    async with ts as tscm:
+        async for msg in tscm:
+            if msg['e'] != 'kline':
+                continue
+
+            k = msg['k']
+            is_candle_closed = k['x']
+            if is_candle_closed:
+                timestamp = k['t']
+                open_price = float(k['o'])
+                high = float(k['h'])
+                low = float(k['l'])
+                close_price = float(k['c'])
+
+                print(f"🕒 Yeni mum kapandı: {CFG['SYMBOL']} {CFG['INTERVAL']} close={close_price}")
+                result = ut_bot_strategy.process_candle(timestamp, open_price, high, low, close_price)
+
+                if result['signal']:
+                    signal = result['signal']
+                    log_msg = f"{signal['message']} | Fiyat: {close_price}"
+                    print(f"📢 {log_msg}")
+                    await send_telegram_message(log_msg)
+
+    await client.close_connection()
 
 # =========================================================================================
 # HTTP SERVER (Render için)
