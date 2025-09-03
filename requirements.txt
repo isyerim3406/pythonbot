@@ -1,4 +1,5 @@
 python-binance
-python-dotenv
 python-telegram-bot
 aiohttp
+python-dotenv
+cryptography
