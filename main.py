@@ -1,7 +1,7 @@
 import asyncio
 import os
-import json
 import time
+from datetime import datetime
 from binance import AsyncClient, BinanceSocketManager
 from dotenv import load_dotenv
 import telegram
@@ -26,7 +26,6 @@ class UTBotStrategy:
         self.initial_capital = options.get('initial_capital', 100)
         self.qty_percent = options.get('qty_percent', 100)
         self.klines = []
-        self.heikin_ashi_candles = []
         self.true_ranges = []
         self.atr_values = []
         self.xATRTrailingStop = None
@@ -45,61 +44,44 @@ class UTBotStrategy:
             return None
         return sum(values[-period:]) / period
 
-    def calculate_heikin_ashi(self, open_price, high, low, close_price):
-        if not self.heikin_ashi_candles:
-            ha_open = (open_price + close_price) / 2
-        else:
-            prev_ha = self.heikin_ashi_candles[-1]
-            ha_open = (prev_ha['open'] + prev_ha['close']) / 2
-        ha_close = (open_price + high + low + close_price) / 4
-        ha_high = max(high, ha_open, ha_close)
-        ha_low = min(low, ha_open, ha_close)
-        return {'open': ha_open, 'high': ha_high, 'low': ha_low, 'close': ha_close}
-
     def process_candle(self, timestamp, open_price, high, low, close_price):
-        self.klines.append({'timestamp': timestamp, 'open': open_price, 'high': high, 'low': low, 'close': close_price})
+        self.klines.append({'timestamp': timestamp, 'close': close_price})
         if len(self.klines) > 500:
             self.klines.pop(0)
         prev_close = self.klines[-2]['close'] if len(self.klines) > 1 else close_price
-        src_candle = self.calculate_heikin_ashi(open_price, high, low, close_price) if self.h else {'close': close_price, 'high': high, 'low': low}
-        if self.h:
-            self.heikin_ashi_candles.append(src_candle)
-        src = src_candle['close']
-        src_high = src_candle['high']
-        src_low = src_candle['low']
-        true_range = max(src_high - src_low, abs(src_high - prev_close), abs(src_low - prev_close))
+        true_range = max(high - low, abs(high - prev_close), abs(low - prev_close))
         self.true_ranges.append(true_range)
         xATR = self.calculate_atr(self.c)
         if xATR is None:
             return {'signal': None}
         nLoss = self.a * xATR
-        prev_xATRTrailingStop = self.xATRTrailingStop if self.xATRTrailingStop is not None else src - nLoss
+        prev_xATRTrailingStop = self.xATRTrailingStop if self.xATRTrailingStop else close_price - nLoss
         prev_pos = self.pos
-        if src > prev_xATRTrailingStop and prev_close > prev_xATRTrailingStop:
-            self.xATRTrailingStop = max(prev_xATRTrailingStop, src - nLoss)
-        elif src < prev_xATRTrailingStop and prev_close < prev_xATRTrailingStop:
-            self.xATRTrailingStop = min(prev_xATRTrailingStop, src + nLoss)
-        elif src > prev_xATRTrailingStop:
-            self.xATRTrailingStop = src - nLoss
+        if close_price > prev_xATRTrailingStop and prev_close > prev_xATRTrailingStop:
+            self.xATRTrailingStop = max(prev_xATRTrailingStop, close_price - nLoss)
+        elif close_price < prev_xATRTrailingStop and prev_close < prev_xATRTrailingStop:
+            self.xATRTrailingStop = min(prev_xATRTrailingStop, close_price + nLoss)
+        elif close_price > prev_xATRTrailingStop:
+            self.xATRTrailingStop = close_price - nLoss
         else:
-            self.xATRTrailingStop = src + nLoss
-        if prev_close < prev_xATRTrailingStop and src > prev_xATRTrailingStop:
+            self.xATRTrailingStop = close_price + nLoss
+        if prev_close < prev_xATRTrailingStop and close_price > prev_xATRTrailingStop:
             self.pos = 1
-        elif prev_close > prev_xATRTrailingStop and src < prev_xATRTrailingStop:
+        elif prev_close > prev_xATRTrailingStop and close_price < prev_xATRTrailingStop:
             self.pos = -1
         else:
             self.pos = prev_pos
         current_atr = self.calculate_atr(self.c)
-        if current_atr is not None:
+        if current_atr:
             self.atr_values.append(current_atr)
         long_term_atr_ma = self.calculate_sma(self.atr_values, self.atr_ma_period)
-        is_sideways = self.use_filter and long_term_atr_ma is not None and (current_atr < long_term_atr_ma * self.atr_threshold)
+        is_sideways = self.use_filter and long_term_atr_ma and (current_atr < long_term_atr_ma * self.atr_threshold)
         signal = None
         if self.pos != prev_pos:
             if self.pos == 1 and not is_sideways:
-                signal = {'type': 'BUY', 'message': 'UT Bot: AL sinyali'}
+                signal = {'type': 'BUY', 'message': 'AL Sinyali'}
             elif self.pos == -1 and not is_sideways:
-                signal = {'type': 'SELL', 'message': 'UT Bot: SAT sinyali'}
+                signal = {'type': 'SELL', 'message': 'SAT Sinyali'}
         return {'signal': signal}
 
     def close_position(self, price):
@@ -107,31 +89,18 @@ class UTBotStrategy:
             return 0
         pnl = self.position_size * (price - self.get_avg_entry_price())
         self.capital += pnl
-        self.trades.append({
-            'type': 'SELL' if self.position_size > 0 else 'BUY',
-            'price': price,
-            'quantity': abs(self.position_size),
-            'action': 'exit',
-            'pnl': pnl
-        })
+        self.trades.append({'action': 'exit', 'pnl': pnl, 'price': price})
         self.position_size = 0
         return pnl
 
     def open_position(self, side, price):
         qty = (self.capital * (self.qty_percent / 100)) / price
         self.position_size = qty if side == 'BUY' else -qty
-        self.trades.append({
-            'type': side,
-            'price': price,
-            'quantity': qty,
-            'action': 'entry'
-        })
+        self.trades.append({'action': 'entry', 'price': price, 'type': side, 'quantity': qty})
     
     def get_avg_entry_price(self):
-        entry_trades = [t for t in self.trades if t['action'] == 'entry']
-        if not entry_trades:
-            return 0
-        return entry_trades[-1]['price']
+        entries = [t for t in self.trades if t['action'] == 'entry']
+        return entries[-1]['price'] if entries else 0
 
 # =========================================================================================
 # BOT AYARLARI
@@ -141,17 +110,15 @@ CFG = {
     'atr_ma_period': 123, 'atr_threshold': 0.7,
     'TRADE_SIZE_PERCENT': 100,
     'SYMBOL': os.getenv('SYMBOL', 'ETHUSDT'),
-    'INTERVAL': os.getenv('INTERVAL', '1m'),
-    'IS_TESTNET': os.getenv('IS_TESTNET', 'False').lower() == 'true',
+    'INTERVAL': os.getenv('INTERVAL', '1h'),
     'INITIAL_CAPITAL': 100,
-    'COOLDOWN_SECONDS': 60*60
+    'COOLDOWN_SECONDS': 60*60,
+    'BOT_NAME': "UTBOTS Python",
+    'MODE': "Simülasyon"
 }
 
-bot_current_position = 'none'
 total_net_profit = 0
-is_bot_initialized = False
 last_signal_time = 0
-is_simulation_mode = not os.getenv('BINANCE_API_KEY') or not os.getenv('BINANCE_SECRET_KEY')
 
 telegram_bot = None
 if os.getenv('TG_TOKEN') and os.getenv('TG_CHAT_ID'):
@@ -161,26 +128,21 @@ ut_bot_strategy = UTBotStrategy(options=CFG)
 
 async def send_telegram_message(text):
     if not telegram_bot or not os.getenv('TG_CHAT_ID'):
-        print("Telegram API token veya chat ID ayarlanmadı. Mesaj atlanıyor.")
+        print("Telegram ayarlı değil.")
         return
-    try:
-        await telegram_bot.send_message(chat_id=os.getenv('TG_CHAT_ID'), text=text, parse_mode=constants.ParseMode.MARKDOWN)
-    except Exception as e:
-        print(f"Telegram mesajı gönderilirken hata oluştu: {e}")
+    await telegram_bot.send_message(chat_id=os.getenv('TG_CHAT_ID'), text=text, parse_mode=constants.ParseMode.MARKDOWN)
 
 # =========================================================================================
-# BOT ANA DÖNGÜSÜ (Önce 500 mum geçmişi, sonra WebSocket)
+# BOT ANA DÖNGÜSÜ
 # =========================================================================================
 async def run_bot():
-    global total_net_profit
+    global total_net_profit, last_signal_time
     print("🤖 Bot başlatılıyor...")
-    await send_telegram_message("🤖 Bot Render üzerinde başlatıldı!")
 
     client = await AsyncClient.create()
     bm = BinanceSocketManager(client)
 
-    # Başlangıçta geçmiş 500 mum al
-    print("📥 Geçmiş 500 mum çekiliyor...")
+    # Başlangıçta geçmiş 500 mum
     candles = await client.get_klines(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'], limit=500)
     last_signal = None
     for c in candles:
@@ -188,83 +150,77 @@ async def run_bot():
         result = ut_bot_strategy.process_candle(ts, o, h, l, cl)
         if result['signal']:
             last_signal = result['signal']
-    if last_signal:
-        msg = f"📊 Son oluşan sinyal: {last_signal['message']}"
-        print(msg)
-        await send_telegram_message(msg)
-    else:
-        print("ℹ️ Son 500 mumda sinyal bulunamadı.")
 
-    # WebSocket ile yeni mumları dinle
+    if last_signal:
+        msg = (
+            f"Bot Başlatıldı!\n"
+            f"Mod:{CFG['MODE']}\n"
+            f"Sembol: {CFG['SYMBOL']}\n"
+            f"Zaman Aralığı: {CFG['INTERVAL']}\n"
+            f"Son Oluşan Sinyal: {last_signal['message']}"
+        )
+        await send_telegram_message(msg)
+
     ts = bm.kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
     async with ts as stream:
         while True:
-            try:
-                msg = await stream.recv()
-                if msg.get('e') != 'kline':
-                    continue
-
-                k = msg['k']
-                if k['x']:  # Mum kapanışı
-                    timestamp = k['t']
-                    open_price = float(k['o'])
-                    high = float(k['h'])
-                    low = float(k['l'])
-                    close_price = float(k['c'])
-
-                    print(f"🕒 Yeni mum kapandı: {CFG['SYMBOL']} {CFG['INTERVAL']} close={close_price}")
-                    result = ut_bot_strategy.process_candle(timestamp, open_price, high, low, close_price)
-
-                    if result['signal']:
-                        signal = result['signal']
-                        # Pozisyonu kapat/aç
-                        pnl = 0
-                        if ut_bot_strategy.position_size != 0:
-                            pnl = ut_bot_strategy.close_position(close_price)
-                            total_net_profit += pnl
-                        ut_bot_strategy.open_position(signal['type'], close_price)
-
-                        log_msg = f"{signal['message']} | Fiyat: {close_price} | PnL: {pnl:.2f} | Toplam: {total_net_profit:.2f} | Bakiye: {ut_bot_strategy.capital:.2f}"
-                    else:
-                        log_msg = f"ℹ️ No signal | close={close_price} | Bakiye: {ut_bot_strategy.capital:.2f}"
-                    print(f"📢 {log_msg}")
-                    await send_telegram_message(log_msg)
-            except Exception as e:
-                print(f"⚠️ WebSocket hata: {e}, tekrar bağlanılıyor...")
-                await asyncio.sleep(5)
-                break
+            kmsg = await stream.recv()
+            if kmsg.get('e') != 'kline':
+                continue
+            k = kmsg['k']
+            if k['x']:
+                ts = k['t']
+                close_price = float(k['c'])
+                result = ut_bot_strategy.process_candle(ts, float(k['o']), float(k['h']), float(k['l']), close_price)
+                if result['signal']:
+                    now = time.time()
+                    if last_signal_time and (now - last_signal_time) < CFG['COOLDOWN_SECONDS']:
+                        continue
+                    side = result['signal']['type']
+                    pnl = ut_bot_strategy.close_position(close_price)
+                    total_net_profit += pnl
+                    ut_bot_strategy.open_position(side, close_price)
+                    last_signal_time = now
+                    ts_str = datetime.utcfromtimestamp(ts/1000).strftime("%d.%m.%Y - %H:%M")
+                    percent_pnl = (pnl / CFG['INITIAL_CAPITAL'])*100 if CFG['INITIAL_CAPITAL'] else 0
+                    total_percent = (total_net_profit / CFG['INITIAL_CAPITAL'])*100
+                    msg = (
+                        f"{side} Emri Gerçekleşti!\n\n"
+                        f"Bot Adı: {CFG['BOT_NAME']}\n"
+                        f"Sembol: {CFG['SYMBOL']}\n"
+                        f"Zaman Aralığı: {CFG['INTERVAL']}\n"
+                        f"Sinyal:{result['signal']['message']}\n"
+                        f"Fiyat:{close_price}\n"
+                        f"Zaman : {ts_str}\n"
+                        f"Bu İşlemden Kar/Zarar : % {percent_pnl:.2f} ({pnl:.2f} USDT)\n"
+                        f"Toplam Net Kar/Zarar : % {total_percent:.2f} ({total_net_profit:.2f} USDT)"
+                    )
+                    await send_telegram_message(msg)
 
     await client.close_connection()
 
 # =========================================================================================
-# HTTP SERVER (Render için)
+# HTTP SERVER
 # =========================================================================================
 async def start_http_server():
     async def handle_root(request):
         return web.Response(text="Bot çalışıyor 🚀")
-
     async def handle_health(request):
         return web.Response(text="ok")
-
     app = web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/healthz", handle_health)
-
     port = int(os.environ.get("PORT", 8000))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 HTTP server ayakta: 0.0.0.0:{port}")
 
 # =========================================================================================
 # MAIN
 # =========================================================================================
 async def main():
-    await asyncio.gather(
-        start_http_server(),
-        run_bot()
-    )
+    await asyncio.gather(start_http_server(), run_bot())
 
 if __name__ == "__main__":
     asyncio.run(main())
