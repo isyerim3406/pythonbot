@@ -34,6 +34,7 @@ class UTBotStrategy:
         self.capital = self.initial_capital
         self.trades = []
         self.position_size = 0
+        self.total_pnl = 0
 
     def calculate_atr(self, period):
         if len(self.true_ranges) < period:
@@ -107,6 +108,7 @@ class UTBotStrategy:
             return
         pnl = self.position_size * (price - self.get_avg_entry_price())
         self.capital += pnl
+        self.total_pnl += pnl
         self.trades.append({
             'type': 'SELL' if self.position_size > 0 else 'BUY',
             'price': price,
@@ -215,7 +217,17 @@ async def run_bot():
 
                     if result['signal']:
                         signal = result['signal']
-                        log_msg = f"{signal['message']} | Fiyat: {close_price}"
+
+                        if signal['type'] == 'BUY':
+                            if ut_bot_strategy.position_size < 0:
+                                ut_bot_strategy.close_position(close_price)
+                            ut_bot_strategy.open_position('BUY', close_price)
+                        elif signal['type'] == 'SELL':
+                            if ut_bot_strategy.position_size > 0:
+                                ut_bot_strategy.close_position(close_price)
+                            ut_bot_strategy.open_position('SELL', close_price)
+
+                        log_msg = f"{signal['message']} | Fiyat: {close_price} | Toplam PnL: {ut_bot_strategy.total_pnl:.2f} | Bakiye: {ut_bot_strategy.capital:.2f}"
                         print(f"📢 {log_msg}")
                         await send_telegram_message(log_msg)
             except Exception as e:
