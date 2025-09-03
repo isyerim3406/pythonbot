@@ -248,6 +248,8 @@ async def fetch_initial_data(client, symbol, interval):
             is_bot_initialized = True
     except Exception as e:
         print(f"İlk verileri çekerken hata: {e}")
+        # Hatanın tekrar yükseltilmesini sağlar
+        raise e
 
 async def place_order(client, side, signal_message):
     global bot_current_position, total_net_profit, last_signal_time
@@ -337,7 +339,15 @@ async def main():
         bm = MockBinanceSocketManager(client)
         ts = bm.kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
 
-    await fetch_initial_data(client, CFG['SYMBOL'], CFG['INTERVAL'])
+    # Zaman aşımı ekleme
+    try:
+        await asyncio.wait_for(fetch_initial_data(client, CFG['SYMBOL'], CFG['INTERVAL']), timeout=30.0)
+    except asyncio.TimeoutError:
+        print("❌ Hata: İlk verileri alma zaman aşımına uğradı. Ağ bağlantınızı veya API anahtarlarınızı kontrol edin.")
+        return
+    except Exception as e:
+        print(f"❌ Hata: İlk verileri alırken beklenmeyen bir sorun oluştu: {e}")
+        return
     
     async with ts as kline_socket:
         while True:
