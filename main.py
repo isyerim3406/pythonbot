@@ -189,7 +189,9 @@ async def run_bot():
                 close_price = float(k['c'])
 
                 # 📊 Log bar kapanışı
-                print(f"📊 Yeni bar alındı. Kapanış: {close_price}")
+                # İstediğiniz formatta log kaydı
+                ts_str = datetime.utcfromtimestamp(ts / 1000).strftime('%d.%m.%Y %H:%M:%S')
+                print(f"Yeni bar alındı | {CFG['SYMBOL']} {CFG['INTERVAL']} | close={close_price:.2f} | {ts_str}")
 
                 result = ut_bot_strategy.process_candle(ts, float(k['o']), float(k['h']), float(k['l']), close_price)
                 if result['signal']:
