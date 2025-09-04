@@ -153,7 +153,7 @@ async def run_bot():
 
     # ✅ Her durumda bot başlatıldı mesajı
     last_signal_ = last_signal['message'] if last_signal else "Yok"
-     = (
+    msg = (
         f"{CFG['BOT_NAME']} Başladı!**\n"
         f"Mod:{CFG['MODE']}\n"
         f"Sembol: {CFG['SYMBOL']}\n"
@@ -229,4 +229,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
