@@ -1,7 +1,7 @@
 import asyncio
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from binance import AsyncClient, BinanceSocketManager
 from dotenv import load_dotenv
 import telegram
@@ -188,9 +188,8 @@ async def run_bot():
                 ts = k['t']
                 close_price = float(k['c'])
 
-                # 📊 Log bar kapanışı
-                # İstediğiniz formatta log kaydı
-                ts_str = datetime.utcfromtimestamp(ts / 1000).strftime('%d.%m.%Y %H:%M:%S')
+                # 📊 Bar kapanışını logla. Bu mesaj sadece mum kapandığında (örneğin 1h aralığında her saat başında) görünür.
+                ts_str = datetime.fromtimestamp(ts / 1000, timezone.utc).strftime('%d.%m.%Y %H:%M:%S')
                 print(f"Yeni bar alındı | {CFG['SYMBOL']} {CFG['INTERVAL']} | close={close_price:.2f} | {ts_str}")
 
                 result = ut_bot_strategy.process_candle(ts, float(k['o']), float(k['h']), float(k['l']), close_price)
@@ -205,12 +204,12 @@ async def run_bot():
                     ut_bot_strategy.open_position(side, close_price)
                     last_signal_time = now
 
-                    ts_str = datetime.utcfromtimestamp(ts/1000).strftime("%d.%m.%Y - %H:%M")
+                    ts_str = datetime.fromtimestamp(ts/1000, timezone.utc).strftime("%d.%m.%Y - %H:%M")
                     percent_pnl = (pnl / CFG['INITIAL_CAPITAL'])*100 if CFG['INITIAL_CAPITAL'] else 0
                     total_percent = (total_net_profit / CFG['INITIAL_CAPITAL'])*100
 
                     msg = (
-                        f"{side} Emri Gerçekleşti!\n\n"
+                        f"**{side} Emri Gerçekleşti!**\n\n"
                         f"Bot Adı: {CFG['BOT_NAME']}\n"
                         f"Sembol: {CFG['SYMBOL']}\n"
                         f"Zaman Aralığı: {CFG['INTERVAL']}\n"
@@ -247,10 +246,7 @@ async def start_http_server():
 # MAIN
 # =========================================================================================
 async def main():
-    await start_http_server()
-    asyncio.create_task(run_bot())
-    while True:
-        await asyncio.sleep(3600)
+    await asyncio.gather(start_http_server(), run_bot())
 
 if __name__ == "__main__":
     asyncio.run(main())
