@@ -151,15 +151,16 @@ async def run_bot():
         if result['signal']:
             last_signal = result['signal']
 
-    if last_signal:
-        msg = (
-            f"Bot Başlatıldı!\n"
-            f"Mod:{CFG['MODE']}\n"
-            f"Sembol: {CFG['SYMBOL']}\n"
-            f"Zaman Aralığı: {CFG['INTERVAL']}\n"
-            f"Son Oluşan Sinyal: {last_signal['message']}"
-        )
-        await send_telegram_message(msg)
+    # ✅ Her durumda bot başlatıldı mesajı
+    last_signal_msg = last_signal['message'] if last_signal else "Yok"
+    msg = (
+        f"Bot Başlatıldı!\n"
+        f"Mod:{CFG['MODE']}\n"
+        f"Sembol: {CFG['SYMBOL']}\n"
+        f"Zaman Aralığı: {CFG['INTERVAL']}\n"
+        f"Son Oluşan Sinyal: {last_signal_msg}"
+    )
+    await send_telegram_message(msg)
 
     ts = bm.kline_socket(symbol=CFG['SYMBOL'], interval=CFG['INTERVAL'])
     async with ts as stream:
@@ -171,6 +172,10 @@ async def run_bot():
             if k['x']:
                 ts = k['t']
                 close_price = float(k['c'])
+
+                # 📊 Log bar kapanışı
+                print(f"📊 Yeni bar alındı. Kapanış: {close_price}")
+
                 result = ut_bot_strategy.process_candle(ts, float(k['o']), float(k['h']), float(k['l']), close_price)
                 if result['signal']:
                     now = time.time()
